@@ -120,7 +120,10 @@ $ui.register(function (ctx) {
                             const fileInfo = $os.stat(localFile.path);
                             fileSize = fileInfo.size();
                           } catch (e) {
-                            // Ignore error
+                            console.error(
+                              '[Delete Watched Episodes] Failed to get file size: ' +
+                                e
+                            );
                           }
 
                           foundFiles.push({
@@ -138,7 +141,10 @@ $ui.register(function (ctx) {
                 })(progress, animeTitle)
               )
               .catch(function (error) {
-                // Ignore errors
+                console.error(
+                  '[Delete Watched Episodes] Failed to get anime entry: ' +
+                    error
+                );
               });
 
             promises.push(promise);
@@ -192,15 +198,11 @@ $ui.register(function (ctx) {
         }
         deletionProgress.set(deleted);
         tray.update();
-
-        // // Artificial delay for visual feedback if needed, but safer not to block too much
-        // await new Promise((resolve) => setTimeout(resolve, 50));
       }
 
       isDeleting.set(false);
 
-      // Final update - rescan or clear list?
-      // Let's clear the list and show success
+      // Clear the list and show success
       filesToDelete.set([]);
       totalSize.set(0);
       tray.updateBadge({ number: 0 });
