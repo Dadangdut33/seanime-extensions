@@ -12,7 +12,7 @@
 
 interface FileToDelete {
   path: string;
-  episode: number;
+  episode: number | undefined;
   anime: string;
   size: number;
 }
@@ -52,125 +52,88 @@ $ui.register(function (ctx) {
   }
 
   // Scanning logic
-  function scanFiles() {
+  async function scanFiles() {
     isScanning.set(true);
     scanError.set('');
     filesToDelete.set([]);
     totalSize.set(0);
 
-    // Use async processing
-    (async function () {
-      try {
-        // Get the anime collection from AniList
-        const collection = $anilist.getAnimeCollection(false);
+    try {
+      const collection = $anilist.getAnimeCollection(false);
+      const lists = collection?.MediaListCollection?.lists;
 
-        if (
-          !collection ||
-          !collection.MediaListCollection ||
-          !collection.MediaListCollection.lists
-        ) {
-          scanError.set('Failed to fetch anime collection');
-          isScanning.set(false);
-          return;
-        }
-
-        const foundFiles: FileToDelete[] = [];
-        const promises: Promise<void>[] = [];
-        let totalBytesFound = 0;
-
-        // Iterate through all lists in the collection
-        const lists = collection.MediaListCollection.lists;
-        for (let i = 0; i < lists.length; i++) {
-          const list = lists[i];
-          if (!list.entries) continue;
-
-          // Iterate through entries in each list
-          for (let j = 0; j < list.entries.length; j++) {
-            const entry = list.entries[j];
-
-            if (!entry.media || !entry.progress) continue;
-
-            const mediaId = entry.media.id;
-            const progress = entry.progress;
-            const animeTitle = entry.media?.title?.userPreferred || 'Unknown';
-
-            // Create a promise for each anime entry fetch
-            const promise = ctx.anime
-              .getAnimeEntry(mediaId)
-              .then(
-                (function (currentProgress, currentTitle) {
-                  return function (animeEntry) {
-                    if (!animeEntry || !animeEntry.localFiles) {
-                      return;
-                    }
-
-                    // Find watched episodes
-                    for (let k = 0; k < animeEntry.localFiles.length; k++) {
-                      const localFile = animeEntry.localFiles[k];
-
-                      // Check if this episode has been watched
-                      if (localFile.metadata && localFile.metadata.episode) {
-                        const episodeNumber = localFile.metadata.episode;
-
-                        if (episodeNumber <= currentProgress) {
-                          // This episode has been watched
-                          // Get file size using $os.stat
-                          let fileSize = 0;
-                          try {
-                            const fileInfo = $os.stat(localFile.path);
-                            fileSize = fileInfo.size();
-                          } catch (e) {
-                            console.error(
-                              '[Delete Watched Episodes] Failed to get file size: ' +
-                                e
-                            );
-                          }
-
-                          foundFiles.push({
-                            path: localFile.path,
-                            episode: episodeNumber,
-                            anime: currentTitle,
-                            size: fileSize,
-                          });
-
-                          totalBytesFound += fileSize;
-                        }
-                      }
-                    }
-                  };
-                })(progress, animeTitle)
-              )
-              .catch(function (error) {
-                console.error(
-                  '[Delete Watched Episodes] Failed to get anime entry: ' +
-                    error
-                );
-              });
-
-            promises.push(promise);
-          }
-        }
-
-        // Wait for all promises to resolve
-        await Promise.all(promises);
-
-        filesToDelete.set(foundFiles);
-        totalSize.set(totalBytesFound);
-
-        // Update badge
-        if (foundFiles.length > 0) {
-          tray.updateBadge({ number: foundFiles.length, intent: 'warning' });
-        } else {
-          tray.updateBadge({ number: 0 }); // Clear badge
-        }
-      } catch (error) {
-        console.error('[Delete Watched Episodes] Error: ' + error);
-        scanError.set('Error: ' + error);
-      } finally {
-        isScanning.set(false);
-        tray.update(); // Re-render
+      if (!lists) {
+        throw new Error('Failed to fetch anime collection');
       }
-    })();
+
+      // Flatten all entries across all lists into one array
+      const allEntries = lists.flatMap((list) => list.entries || []);
+
+      // Map entries to promises that fetch local file info
+      const scanPromises = allEntries.map(async (entry) => {
+        if (!entry.media?.id || entry.progress === undefined) return [];
+
+        try {
+          const animeEntry = await ctx.anime.getAnimeEntry(entry.media.id);
+          if (!animeEntry?.localFiles) return [];
+
+          const currentTitle = entry.media.title?.userPreferred || 'Unknown';
+
+          // Filter for files that match the "watched" criteria
+          return animeEntry.localFiles
+            .filter(
+              (file) =>
+                file.metadata?.episode &&
+                entry.progress &&
+                file.metadata.episode <= entry.progress
+            )
+            .map((file) => {
+              let fileSize = 0;
+              try {
+                fileSize = $os.stat(file.path).size();
+              } catch (e) {
+                console.error(`[Scan] Failed to stat ${file.path}:`, e);
+              }
+
+              return {
+                path: file.path,
+                episode: file.metadata?.episode,
+                anime: currentTitle,
+                size: fileSize,
+              };
+            });
+        } catch (err) {
+          console.error(`[Scan] Error fetching entry ${entry.media.id}:`, err);
+          return [];
+        }
+      });
+
+      // Resolve all scans and flatten the results
+      const results = await Promise.all(scanPromises);
+      const foundFiles = results.flat();
+      const totalBytesFound = foundFiles.reduce(
+        (acc, file) => acc + file.size,
+        0
+      );
+
+      // Update UI State
+      filesToDelete.set(foundFiles);
+      totalSize.set(totalBytesFound);
+
+      if (foundFiles.length > 0) {
+        tray.updateBadge({ number: foundFiles.length, intent: 'warning' });
+        ctx.toast.info(`Found ${foundFiles.length} watched episodes`);
+      } else {
+        tray.updateBadge({ number: 0 });
+        ctx.toast.info('No watched episodes found');
+      }
+    } catch (error) {
+      console.error('[Delete Watched Episodes] Error:', error);
+      scanError.set(error instanceof Error ? error.message : String(error));
+    } finally {
+      isScanning.set(false);
+      tray.update();
+    }
   }
 
   // Deletion logic
