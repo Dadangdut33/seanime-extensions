@@ -1,0 +1,18 @@
+{
+  "name": "seanime-extensions",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node dev.ts",
+    "update-types": "node update-types.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.26.2",
+  "devDependencies": {
+    "@types/node": "^25.0.8"
+  }
+}

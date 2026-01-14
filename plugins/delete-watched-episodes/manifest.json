@@ -1,0 +1,24 @@
+{
+  "id": "delete-watched-episodes",
+  "name": "Delete Watched Episodes",
+  "version": "1.0.0",
+  "language": "typescript",
+  "type": "plugin",
+  "description": "Delete local files for episodes you have already watched to free up disk space",
+  "author": "Dadangdut33",
+  "icon": "",
+  "website": "",
+  "lang": "multi",
+  "manifestURI": "https://raw.githubusercontent.com/dadangdut33/seanime-extensions/refs/heads/master/plugins/delete-watched-episodes/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/dadangdut33/seanime-extensions/refs/heads/master/plugins/delete-watched-episodes/code.ts",
+  "plugin": {
+    "version": "1",
+    "permissions": {
+      "scopes": ["anilist", "system"],
+      "allow": {
+        "readPaths": ["$DOWNLOAD/**/*", "$SEANIME_ANIME_LIBRARY/**/*"],
+        "writePaths": ["$DOWNLOAD/**/*", "$SEANIME_ANIME_LIBRARY/**/*"]
+      }
+    }
+  }
+}
