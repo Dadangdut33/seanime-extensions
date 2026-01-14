@@ -294,7 +294,12 @@ $ui.register(function (ctx) {
       // File List
       const fileList = filesToDelete.get().map(function (file) {
         // we need to use file.path for some reason because i dont know why file.name causes error
-        const nameFromPath = file.path.split('\\');
+        console.log('File to delete');
+        console.log(file);
+        const nameFromPath =
+          $os.platform === 'windows'
+            ? file.path.split('\\')
+            : file.path.split('/');
         const actualName = nameFromPath.pop() ?? 'Failed to get anime name';
         return tray.div(
           [
