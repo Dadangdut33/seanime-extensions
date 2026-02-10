@@ -95,15 +95,19 @@ const server = http.createServer((req, res) => {
       if (manifest.manifestURI && typeof manifest.manifestURI === 'string') {
         manifest.manifestURI = manifest.manifestURI.replace(
           REMOTE_BASE,
-          localBase
+          localBase,
         );
       }
       if (manifest.payloadURI && typeof manifest.payloadURI === 'string') {
         manifest.payloadURI = manifest.payloadURI.replace(
           REMOTE_BASE,
-          localBase
+          localBase,
         );
       }
+
+      // also replace the id and name with +dev
+      manifest.id = manifest.id + '-dev';
+      manifest.name = manifest.name + ' (Dev)';
 
       console.log(`[MANIFEST] Served modified: ${pathname}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -112,7 +116,7 @@ const server = http.createServer((req, res) => {
     } catch (err) {
       console.error(
         `[ERROR] Failed to process manifest.json at ${filePath}:`,
-        err
+        err,
       );
       res.writeHead(500);
       res.end('Internal Server Error');
@@ -144,7 +148,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(
-    `\x1b[32m✔ Dev Server running at http://localhost:${PORT}\x1b[0m`
+    `\x1b[32m✔ Dev Server running at http://localhost:${PORT}\x1b[0m`,
   );
   console.log(`Serving plugins from: ${PLUGINS_DIR}`);
   console.log(`Replacing remote base: ${REMOTE_BASE}\n`);

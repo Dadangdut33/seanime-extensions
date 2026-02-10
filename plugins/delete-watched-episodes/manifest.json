@@ -1,7 +1,7 @@
 {
   "id": "delete-watched-episodes",
   "name": "Delete Watched Episodes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "language": "typescript",
   "type": "plugin",
   "description": "Delete local files for episodes you have already watched to free up disk space",
@@ -14,7 +14,7 @@
   "plugin": {
     "version": "1",
     "permissions": {
-      "scopes": ["anilist", "system"],
+      "scopes": ["anilist", "system", "storage"],
       "allow": {
         "readPaths": ["$DOWNLOAD/**/*", "$SEANIME_ANIME_LIBRARY/**/*"],
         "writePaths": ["$DOWNLOAD/**/*", "$SEANIME_ANIME_LIBRARY/**/*"]
