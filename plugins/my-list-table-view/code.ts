@@ -13,6 +13,14 @@ interface TableRow {
   progress: number;
   latestEpisode: number | null;
   totalEpisodes: number | null;
+  releasedUnwatched: number | null;
+  downloadedUnwatched: number | null;
+  neededToDownload: number | null;
+  episodeStatuses: Array<{
+    episode: number;
+    state: 'watched' | 'downloaded' | 'missing';
+  }> | null;
+  hiddenEpisodeStatusCount: number;
   score: number | null;
   status: TableStatus;
   format: string;
@@ -27,6 +35,7 @@ type ColumnKey =
   | 'score'
   | 'status'
   | 'progress'
+  | 'unwatched'
   | 'format';
 
 type ColumnVisibility = Record<ColumnKey, boolean>;
@@ -48,6 +57,7 @@ function init() {
       score: true,
       status: true,
       progress: true,
+      unwatched: true,
       format: true,
     };
 
@@ -79,12 +89,14 @@ function init() {
     );
     const rowsState = ctx.state<TableRow[]>([]);
     const loadingState = ctx.state<boolean>(true);
+    const isEpDataLoadingState = ctx.state<boolean>(false);
     const errorState = ctx.state<string>('');
     const debugLogsState = ctx.state<string[]>([]);
     const columnVisibilityState = ctx.state<ColumnVisibility>(
       mergedColumnVisibility,
     );
     const coverSizeState = ctx.state<number>(initialCoverSize);
+    let refreshRunId = 0;
 
     const pushDebugLog = (message: string) => {
       const now = new Date();
@@ -114,13 +126,29 @@ function init() {
     function normalizeStatus(
       status?: $app.AL_MediaListStatus,
     ): TableStatus | undefined {
-      switch (status) {
+      if (!status) return undefined;
+
+      // we specifically need to do this!!!
+      // i dont know why but the data that we get is very unreliable
+      // I tried comparing some to like the === "CURRENT" or stuff and it dont match
+      // Also have try seeing the raw data from console log and
+      // does not see any weird whitepsace or anything
+      const s = status.trim().toUpperCase();
+
+      switch (s) {
         case 'CURRENT':
         case 'REPEATING':
           return 'CURRENT';
 
+        case 'COMPLETED':
+        case 'PAUSED':
+        case 'DROPPED':
+        case 'PLANNING':
+          return s as TableStatus;
+
         default:
-          return status as TableStatus | undefined;
+          // if it dont match whatever man, just move to current
+          return 'CURRENT';
       }
     }
 
@@ -162,6 +190,10 @@ function init() {
       ) {
         latestEpisode = Math.min(latestEpisode, totalEpisodes);
       }
+      const releasedUnwatched =
+        typeof latestEpisode === 'number'
+          ? Math.max(0, latestEpisode - (entry.progress || 0))
+          : null;
 
       return {
         entryId: entry.id,
@@ -175,6 +207,11 @@ function init() {
         progress: entry.progress || 0,
         latestEpisode,
         totalEpisodes,
+        releasedUnwatched,
+        downloadedUnwatched: null,
+        neededToDownload: null,
+        episodeStatuses: null,
+        hiddenEpisodeStatusCount: 0,
         score: parseInt(String(entry.score)) || null,
         status,
         format: media.format || '-',
@@ -200,15 +237,130 @@ function init() {
       return rows;
     }
 
-    const refreshRows = () => {
+    async function enrichRowsWithDownloadInfo(
+      rows: TableRow[],
+    ): Promise<TableRow[]> {
+      const enrichedRows = await Promise.all(
+        rows.map(async (row) => {
+          if (row.status !== 'CURRENT') {
+            return row;
+          }
+          if (typeof row.releasedUnwatched !== 'number') {
+            return row;
+          }
+
+          try {
+            const entry = await ctx.anime.getAnimeEntry(row.mediaId);
+            const downloadedUnwatchedRaw = entry.libraryData?.unwatchedCount;
+            const downloadedUnwatched = Math.max(
+              0,
+              typeof downloadedUnwatchedRaw === 'number'
+                ? downloadedUnwatchedRaw
+                : 0,
+            );
+            const neededToDownload = Math.max(
+              0,
+              parseInt(String(row.releasedUnwatched)) - downloadedUnwatched,
+            );
+
+            const downloadedEpisodeNumbers = new Set<number>();
+            for (const episode of entry.episodes || []) {
+              if (!episode || !episode.isDownloaded) continue;
+              const epNum = Number(
+                episode.progressNumber || episode.episodeNumber,
+              );
+              if (Number.isFinite(epNum) && epNum > 0) {
+                downloadedEpisodeNumbers.add(epNum);
+              }
+            }
+
+            const watchedUntil = Math.max(0, Number(row.progress) || 0);
+            const latestKnown =
+              typeof row.latestEpisode === 'number' ? row.latestEpisode : null;
+            const highestDownloaded = downloadedEpisodeNumbers.size
+              ? Math.max(...Array.from(downloadedEpisodeNumbers))
+              : 0;
+            const maxEpisode = Math.max(
+              watchedUntil,
+              latestKnown || 0,
+              highestDownloaded,
+            );
+            const MAX_RENDERED_PILLS = 80;
+            const startEpisode =
+              maxEpisode > MAX_RENDERED_PILLS
+                ? maxEpisode - MAX_RENDERED_PILLS + 1
+                : 1;
+            const hiddenEpisodeStatusCount =
+              maxEpisode > MAX_RENDERED_PILLS
+                ? maxEpisode - MAX_RENDERED_PILLS
+                : 0;
+            const episodeStatuses: Array<{
+              episode: number;
+              state: 'watched' | 'downloaded' | 'missing';
+            }> = [];
+
+            for (
+              let episodeNumber = startEpisode;
+              episodeNumber <= maxEpisode;
+              episodeNumber++
+            ) {
+              if (episodeNumber <= watchedUntil) {
+                episodeStatuses.push({
+                  episode: episodeNumber,
+                  state: 'watched',
+                });
+                continue;
+              }
+              if (downloadedEpisodeNumbers.has(episodeNumber)) {
+                episodeStatuses.push({
+                  episode: episodeNumber,
+                  state: 'downloaded',
+                });
+                continue;
+              }
+              if (latestKnown !== null && episodeNumber <= latestKnown) {
+                episodeStatuses.push({
+                  episode: episodeNumber,
+                  state: 'missing',
+                });
+              }
+            }
+
+            return {
+              ...row,
+              downloadedUnwatched,
+              neededToDownload,
+              episodeStatuses,
+              hiddenEpisodeStatusCount,
+            };
+          } catch (error) {
+            pushDebugLog(
+              'download-info:error mediaId=' +
+                row.mediaId +
+                ' message=' +
+                (error instanceof Error ? error.message : String(error)),
+            );
+            return row;
+          }
+        }),
+      );
+
+      return enrichedRows;
+    }
+
+    const refreshRows = async () => {
+      const runId = ++refreshRunId;
       pushDebugLog('refreshRows:start');
       loadingState.set(true);
+      isEpDataLoadingState.set(false);
       errorState.set('');
 
       try {
-        const rows = loadRows();
-        rowsState.set(rows);
-        const statusCounts = rows.reduce(
+        const loadedRows = loadRows();
+        if (runId !== refreshRunId) return;
+        rowsState.set(loadedRows);
+        pushDebugLog('refreshRows:base-loaded rows=' + loadedRows.length);
+        const statusCounts = loadedRows.reduce(
           (acc, row) => {
             acc[row.status] += 1;
             return acc;
@@ -223,7 +375,7 @@ function init() {
         );
         pushDebugLog(
           'refreshRows:success rows=' +
-            rows.length +
+            loadedRows.length +
             ' current=' +
             statusCounts.CURRENT +
             ' completed=' +
@@ -236,6 +388,7 @@ function init() {
             statusCounts.PLANNING,
         );
       } catch (error) {
+        if (runId !== refreshRunId) return;
         rowsState.set([]);
         const message =
           error instanceof Error ? error.message : 'Failed to fetch anime list';
@@ -243,13 +396,42 @@ function init() {
         pushDebugLog('refreshRows:error ' + message);
         ctx.toast.error('Failed to load anime list');
       } finally {
+        if (runId !== refreshRunId) return;
         loadingState.set(false);
+        isEpDataLoadingState.set(false);
         pushDebugLog('refreshRows:end loading=false');
+      }
+    };
+
+    const loadEnrichedEpisodes = async () => {
+      const runId = ++refreshRunId;
+      pushDebugLog('loadEnrichedEpisodes:start');
+      isEpDataLoadingState.set(true);
+      errorState.set('');
+      try {
+        const currentRows = rowsState.get();
+        const rows = await enrichRowsWithDownloadInfo(currentRows);
+        if (runId !== refreshRunId) return;
+        rowsState.set(rows);
+        pushDebugLog('loadEnrichedEpisodes:success rows=' + rows.length);
+      } catch (error) {
+        if (runId !== refreshRunId) return;
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to enrich download status';
+        errorState.set(message);
+        pushDebugLog('loadEnrichedEpisodes:error ' + message);
+        ctx.toast.error('Failed to load download status');
+      } finally {
+        if (runId !== refreshRunId) return;
+        isEpDataLoadingState.set(false);
       }
     };
 
     panel.channel.sync('rows', rowsState);
     panel.channel.sync('loading', loadingState);
+    panel.channel.sync('download-loading', isEpDataLoadingState);
     panel.channel.sync('error', errorState);
     panel.channel.sync('debug-logs', debugLogsState);
     panel.channel.sync('column-visibility', columnVisibilityState);
@@ -258,6 +440,13 @@ function init() {
     panel.channel.on('refresh', (payload: any) => {
       pushDebugLog('channel:refresh payload=' + JSON.stringify(payload || {}));
       refreshRows();
+    });
+    panel.channel.on('load-enriched-episodes', (payload: any) => {
+      pushDebugLog(
+        'channel:load-enriched-episodes payload=' +
+          JSON.stringify(payload || {}),
+      );
+      loadEnrichedEpisodes();
     });
 
     panel.channel.on('open-anime', (payload: { mediaId?: number }) => {
@@ -549,8 +738,8 @@ function init() {
         .title-btn:hover { text-decoration: underline; }
 
         .title-cell {
-            width: 360px;
-            max-width: 360px;
+            min-width: 200px;
+            max-width: 3500px;
         }
 
         .muted { color: var(--muted); }
@@ -570,15 +759,15 @@ function init() {
             display: flex;
             flex-direction: column;
             gap: 6px;
-            min-width: 170px;
+            min-width: 100px;
+            max-width: 200px;
         }
 
         .progress-top {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 4px;
-            margin-right: 8px;
+            gap: 0px;
         }
 
         .progress-meta {
@@ -643,6 +832,65 @@ function init() {
             word-break: break-word;
         }
 
+        .episode-status {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .episode-status-summary {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .episode-pill-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+
+        .episode-status-cell {
+            width: 320px;
+            max-width: 320px;
+        }
+
+        .episode-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            font-size: 11px;
+            line-height: 1;
+            padding: 5px 7px;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .episode-pill--watched {
+            background: rgba(22, 163, 74, 0.18);
+            border-color: rgba(22, 163, 74, 0.55);
+            color: #dcfce7;
+        }
+
+        .episode-pill--downloaded {
+            background: rgba(14, 165, 233, 0.18);
+            border-color: rgba(14, 165, 233, 0.55);
+            color: #e0f2fe;
+        }
+
+        .episode-pill--missing {
+            background: rgba(239, 68, 68, 0.18);
+            border-color: rgba(239, 68, 68, 0.55);
+            color: #fee2e2;
+        }
+
+        .episode-pill-check {
+            font-weight: 700;
+            font-size: 10px;
+        }
+
         .table-wrap::-webkit-scrollbar,
         .debug-logs::-webkit-scrollbar {
             width: 10px;
@@ -698,6 +946,7 @@ function init() {
             { key: "score", label: "Score" },
             { key: "status", label: "Status" },
             { key: "progress", label: "Progress" },
+            { key: "unwatched", label: "Episode Status" },
             { key: "format", label: "Type / Format" }
         ]
         const DEFAULT_COLUMN_VISIBILITY = {
@@ -708,6 +957,7 @@ function init() {
             score: true,
             status: true,
             progress: true,
+            unwatched: true,
             format: true
         }
         const COVER_SIZE_MIN = 28
@@ -754,6 +1004,7 @@ function init() {
 
         function App() {
             const [loading, setLoading] = useState(true)
+            const [isEpDataLoading, setIsEpDataLoading] = useState(false)
             const [error, setError] = useState("")
             const [rows, setRows] = useState([])
             const [activeTab, setActiveTab] = useState("CURRENT")
@@ -794,6 +1045,9 @@ function init() {
                 })
                 on("error", (value) => {
                     setError(value ? String(value) : "")
+                })
+                on("download-loading", (value) => {
+                    setIsEpDataLoading(Boolean(value))
                 })
                 on("column-visibility", (value) => {
                     if (value && typeof value === "object") {
@@ -839,6 +1093,11 @@ function init() {
                 send("refresh", { requestedAt: Date.now() })
             }
 
+            const onLoadEnrichedEpisodes = () => {
+                logClient("load-enriched-episodes clicked")
+                send("load-enriched-episodes", { requestedAt: Date.now() })
+            }
+
             const onToggleColumn = (columnKey, visible) => {
                 const next = { ...columnVisibility, [columnKey]: visible }
                 setColumnVisibility(next)
@@ -852,6 +1111,7 @@ function init() {
             }
 
             const headerCells = []
+            const showUnwatchedColumn = columnVisibility.unwatched && activeTab === "CURRENT"
             if (columnVisibility.cover) headerCells.push(h("th", { key: "h-cover" }, "Cover"))
             if (columnVisibility.title) headerCells.push(h("th", { key: "h-title" }, "Title"))
             if (columnVisibility.watched) headerCells.push(h("th", { key: "h-watched" }, "Watched"))
@@ -859,10 +1119,16 @@ function init() {
             if (columnVisibility.score) headerCells.push(h("th", { key: "h-score" }, "Score"))
             if (columnVisibility.status) headerCells.push(h("th", { key: "h-status" }, "Status"))
             if (columnVisibility.progress) headerCells.push(h("th", { key: "h-progress" }, "Progress"))
+            if (showUnwatchedColumn) headerCells.push(h("th", { key: "h-unwatched" }, "Episode Status"))
             if (columnVisibility.format) headerCells.push(h("th", { key: "h-format" }, "Type / Format"))
                 const tableBodyRows = visibleRows.map((row) => {
                 const progressContext = getProgressContext(row)
                 const totalText = typeof row.totalEpisodes === "number" ? String(row.totalEpisodes) : "-"
+                const hasDownloadContext =
+                    typeof row.releasedUnwatched === "number" &&
+                    typeof row.downloadedUnwatched === "number" &&
+                    typeof row.neededToDownload === "number"
+
                 const coverHeight = Math.round(coverSize * 1.38)
                 const cells = []
 
@@ -910,6 +1176,67 @@ function init() {
                             ])
                         )
                     )
+                }
+                if (showUnwatchedColumn) {
+                    if (isEpDataLoading && row.status === "CURRENT") {
+                        cells.push(h("td", { key: "unwatched" }, "Loading..."))
+                    } else if (!hasDownloadContext || !Array.isArray(row.episodeStatuses)) {
+                        cells.push(h("td", { key: "unwatched" }, "?"))
+                    } else {
+                        const pillItems = row.episodeStatuses.map((item) => {
+                            const className = "episode-pill episode-pill--" + item.state
+                            const children = []
+                            if (item.state === "watched") {
+                                children.push(h("span", { class: "episode-pill-check", key: "check" }, "✓"))
+                            }
+                            children.push(h("span", { key: "label" }, "Ep " + item.episode))
+                            return h("span", { class: className, key: item.state + "-" + item.episode }, children)
+                        })
+
+                        if (row.hiddenEpisodeStatusCount > 0) {
+                            pillItems.unshift(
+                                h("span", { class: "episode-pill", key: "older-count" }, "+" + row.hiddenEpisodeStatusCount + " older")
+                            )
+                        }
+
+                        const readyCount = row.downloadedUnwatched
+                        const needCount = row.neededToDownload
+                        let statusSummary = ""
+                        if (readyCount <= 0) {
+                            statusSummary =
+                                (needCount === 1 ? "1 new ep" : needCount + " new eps") +
+                                " to download"
+                        } else {
+                            statusSummary =
+                                readyCount +
+                                " " +
+                                (readyCount === 1 ? "ep" : "eps") +
+                                " ready to watch [" +
+                                readyCount +
+                                "/" +
+                                row.releasedUnwatched +
+                                "]"
+                            if (needCount > 0) {
+                                statusSummary +=
+                                    " • " +
+                                    (needCount === 1 ? "1 new ep" : needCount + " new eps") +
+                                    " to download"
+                            }
+                        }
+
+                        cells.push(
+                            h("td", { key: "unwatched", class: "episode-status-cell" },
+                                h("div", { class: "episode-status" }, [
+                                    h(
+                                        "div",
+                                        { class: "episode-status-summary", key: "summary" },
+                                        statusSummary
+                                    ),
+                                    h("div", { class: "episode-pill-list", key: "pills" }, pillItems)
+                                ])
+                            )
+                        )
+                    }
                 }
                 if (columnVisibility.format) cells.push(h("td", { key: "format" }, row.format || "-"))
 
@@ -977,12 +1304,13 @@ function init() {
                             h("summary", null, "Columns"),
                             h("div", { class: "column-menu-content" }, columnOptions)
                         ]),
+                        h("button", { class: "btn", onClick: onLoadEnrichedEpisodes, disabled: loading || isEpDataLoading }, isEpDataLoading ? "Loading Status..." : "Load Episode Status"),
                         h("button", { class: "btn", onClick: onRefresh }, "Refresh")
                     ])
                 ]),
                 content,
                 h("details", { class: "debug-panel" }, [
-                    h("summary", null, "Debug logs (" + String(debugLogs.length) + ") | loading=" + String(loading) + " | rows=" + String(rows.length) + " | activeTab=" + activeTab),
+                    h("summary", null, "Debug logs (" + String(debugLogs.length) + ") | loading=" + String(loading) + " | isEpDataLoading=" + String(isEpDataLoading) + " | rows=" + String(rows.length) + " | activeTab=" + activeTab),
                     h("div", { class: "debug-logs" }, debugLogs.length ? debugLogs.join("\\n") : "No debug logs yet.")
                 ])
             ])
