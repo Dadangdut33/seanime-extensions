@@ -163,6 +163,14 @@ function init() {
       );
     }
 
+    function normalizeScoreToTen(score?: number): number | null {
+      if (!score) return null;
+      const num = Number(score);
+      // Some list APIs return score on 100-point scale; normalize to 10-point scale.
+      const normalized = num > 10 ? num / 10 : num;
+      return Math.round(normalized * 10) / 10;
+    }
+
     function toRow(
       entry: $app.AL_AnimeCollection_MediaListCollection_Lists_Entries,
       fallbackStatus?: $app.AL_MediaListStatus,
@@ -212,7 +220,7 @@ function init() {
         neededToDownload: null,
         episodeStatuses: null,
         hiddenEpisodeStatusCount: 0,
-        score: parseInt(String(entry.score)) || null,
+        score: normalizeScoreToTen(entry.score),
         status,
         format: media.format || '-',
         siteUrl: media.siteUrl || `https://anilist.co/anime/${media.id}`,
@@ -571,6 +579,31 @@ function init() {
         .tab.active { border-color: var(--accent); background: var(--accent-soft); }
 
         .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+        .filter-bar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 8px;
+            background: rgba(255,255,255,0.03);
+        }
+
+        .filter-input {
+            border: 1px solid var(--line);
+            background: var(--panel-2);
+            color: var(--text);
+            border-radius: 8px;
+            padding: 7px 9px;
+            font-size: 12px;
+            min-height: 34px;
+        }
+
+        .filter-input-score {
+            width: 108px;
+        }
 
         .btn {
             border: 1px solid var(--line);
@@ -1005,7 +1038,7 @@ function init() {
         }
 
         function formatScore(value) {
-            if (typeof value !== "number") return "-"
+            if (typeof value !== "number" || value === 0) return "-"
             return value % 1 === 0 ? String(value) : value.toFixed(1)
         }
 
@@ -1047,6 +1080,12 @@ function init() {
             const [columnVisibility, setColumnVisibility] = useState(DEFAULT_COLUMN_VISIBILITY)
             const [coverSize, setCoverSize] = useState(DEFAULT_COVER_SIZE)
             const [debugLogs, setDebugLogs] = useState([])
+            const [searchText, setSearchText] = useState("")
+            const [formatFilter, setFormatFilter] = useState("")
+            const [scoreMinFilter, setScoreMinFilter] = useState("")
+            const [scoreMaxFilter, setScoreMaxFilter] = useState("")
+            const [episodesMinFilter, setEpisodesMinFilter] = useState("")
+            const [episodesMaxFilter, setEpisodesMaxFilter] = useState("")
             const [scrollTop, setScrollTop] = useState(0)
             const [viewportHeight, setViewportHeight] = useState(700)
             const tableWrapRef = useRef(null)
@@ -1157,9 +1196,49 @@ function init() {
                 return counts
             }, [rows])
 
+            const formatOptions = useMemo(() => {
+                const set = new Set()
+                rows.forEach((row) => {
+                    if (row.format) set.add(String(row.format))
+                })
+                return Array.from(set).sort()
+            }, [rows])
+
             const visibleRows = useMemo(() => {
-                return rows.filter((row) => row.status === activeTab)
-            }, [rows, activeTab])
+                const lowerSearch = searchText.trim().toLowerCase()
+                const minScore = scoreMinFilter === "" ? null : Number(scoreMinFilter)
+                const maxScore = scoreMaxFilter === "" ? null : Number(scoreMaxFilter)
+                const minEpisodes = episodesMinFilter === "" ? null : Number(episodesMinFilter)
+                const maxEpisodes = episodesMaxFilter === "" ? null : Number(episodesMaxFilter)
+
+                return rows.filter((row) => {
+                    if (row.status !== activeTab) return false
+                    if (lowerSearch && !String(row.title || "").toLowerCase().includes(lowerSearch)) return false
+                    if (formatFilter && String(row.format || "") !== formatFilter) return false
+                    if (minScore !== null) {
+                        if (typeof row.score !== "number" || row.score < minScore) return false
+                    }
+                    if (maxScore !== null) {
+                        if (typeof row.score !== "number" || row.score > maxScore) return false
+                    }
+                    if (minEpisodes !== null) {
+                        if (typeof row.totalEpisodes !== "number" || row.totalEpisodes < minEpisodes) return false
+                    }
+                    if (maxEpisodes !== null) {
+                        if (typeof row.totalEpisodes !== "number" || row.totalEpisodes > maxEpisodes) return false
+                    }
+                    return true
+                })
+            }, [
+                rows,
+                activeTab,
+                searchText,
+                formatFilter,
+                scoreMinFilter,
+                scoreMaxFilter,
+                episodesMinFilter,
+                episodesMaxFilter
+            ])
 
             const send = (eventName, payload) => {
                 if (window.webview && typeof window.webview.send === "function") {
@@ -1191,6 +1270,15 @@ function init() {
                 coverSizeDebounceRef.current = setTimeout(() => {
                     send("set-cover-size", { size: nextSize })
                 }, 180)
+            }
+
+            const onResetFilters = () => {
+                setSearchText("")
+                setFormatFilter("")
+                setScoreMinFilter("")
+                setScoreMaxFilter("")
+                setEpisodesMinFilter("")
+                setEpisodesMaxFilter("")
             }
 
             const headerCells = []
@@ -1462,6 +1550,65 @@ function init() {
                         h("button", { class: "btn", onClick: onLoadEnrichedEpisodes, disabled: loading || isEpDataLoading }, isEpDataLoading ? "Loading Status..." : "Load Episode Status"),
                         h("button", { class: "btn", onClick: onRefresh }, "Refresh")
                     ])
+                ]),
+                h("div", { class: "filter-bar" }, [
+                    h("input", {
+                        class: "filter-input",
+                        placeholder: "Search title...",
+                        value: searchText,
+                        onInput: (e) => setSearchText(String(e.currentTarget.value || ""))
+                    }),
+                    h(
+                        "select",
+                        {
+                            class: "filter-input",
+                            value: formatFilter,
+                            onChange: (e) => setFormatFilter(String(e.currentTarget.value || ""))
+                        },
+                        [
+                            h("option", { value: "" }, "All formats"),
+                            ...formatOptions.map((fmt) => h("option", { value: fmt, key: "fmt-" + fmt }, fmt))
+                        ]
+                    ),
+                    h("input", {
+                        class: "filter-input filter-input-score",
+                        type: "number",
+                        min: "0",
+                        max: "10",
+                        step: "1",
+                        placeholder: "Score min",
+                        value: scoreMinFilter,
+                        onInput: (e) => setScoreMinFilter(String(e.currentTarget.value || ""))
+                    }),
+                    h("input", {
+                        class: "filter-input filter-input-score",
+                        type: "number",
+                        min: "0",
+                        max: "10",
+                        step: "1",
+                        placeholder: "Score max",
+                        value: scoreMaxFilter,
+                        onInput: (e) => setScoreMaxFilter(String(e.currentTarget.value || ""))
+                    }),
+                    h("input", {
+                        class: "filter-input",
+                        type: "number",
+                        min: "1",
+                        step: "1",
+                        placeholder: "Episodes min",
+                        value: episodesMinFilter,
+                        onInput: (e) => setEpisodesMinFilter(String(e.currentTarget.value || ""))
+                    }),
+                    h("input", {
+                        class: "filter-input",
+                        type: "number",
+                        min: "1",
+                        step: "1",
+                        placeholder: "Episodes max",
+                        value: episodesMaxFilter,
+                        onInput: (e) => setEpisodesMaxFilter(String(e.currentTarget.value || ""))
+                    }),
+                    h("button", { class: "btn", onClick: onResetFilters }, "Reset Filters")
                 ]),
                 content,
                 h("details", { class: "debug-panel" }, [
