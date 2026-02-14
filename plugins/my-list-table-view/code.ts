@@ -11,6 +11,7 @@ interface TableRow {
   title: string;
   coverImage: string;
   progress: number;
+  latestEpisode: number | null;
   totalEpisodes: number | null;
   score: number | null;
   status: TableStatus;
@@ -144,6 +145,24 @@ function init() {
       const status = normalizeStatus(entry.status || fallbackStatus)!;
       if (!status) return undefined;
 
+      const totalEpisodes = parseInt(String(media.episodes)) || null;
+      const nextAiringEpisode = media.nextAiringEpisode?.episode;
+      let latestEpisode: number | null = null;
+      if (
+        typeof nextAiringEpisode === 'number' &&
+        Number.isFinite(nextAiringEpisode)
+      ) {
+        latestEpisode = Math.max(0, nextAiringEpisode - 1);
+      } else if (typeof totalEpisodes === 'number') {
+        latestEpisode = totalEpisodes;
+      }
+      if (
+        typeof latestEpisode === 'number' &&
+        typeof totalEpisodes === 'number'
+      ) {
+        latestEpisode = Math.min(latestEpisode, totalEpisodes);
+      }
+
       return {
         entryId: entry.id,
         mediaId: media.id,
@@ -154,7 +173,8 @@ function init() {
           media.coverImage?.extraLarge ||
           '',
         progress: entry.progress || 0,
-        totalEpisodes: parseInt(String(media.episodes)) || null,
+        latestEpisode,
+        totalEpisodes,
         score: parseInt(String(entry.score)) || null,
         status,
         format: media.format || '-',
@@ -474,13 +494,13 @@ function init() {
         }
 
         thead {
-          z-index: 1;
+          z-index: 5;
         }
 
         thead th {
             position: sticky;
             top: 0;
-            z-index: 1;
+            z-index: 5;
             text-align: left;
             font-size: 12px;
             letter-spacing: 0.04em;
@@ -546,19 +566,50 @@ function init() {
             background: rgba(255, 255, 255, 0.03);
         }
 
-        .progress { display: flex; align-items: center; gap: 6px; }
+        .progress {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 170px;
+        }
+
+        .progress-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 4px;
+            margin-right: 8px;
+        }
+
+        .progress-meta {
+            font-size: 11px;
+            color: var(--muted);
+            white-space: nowrap;
+        }
 
         .progress-track {
-            width: 84px;
+            position: relative;
+            width: 128px;
             height: 6px;
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.12);
             overflow: hidden;
         }
 
+        .progress-released {
+            position: absolute;
+            inset: 0 auto 0 0;
+            height: 100%;
+            background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+            opacity: 0.85;
+        }
+
         .progress-fill {
+            position: absolute;
+            inset: 0 auto 0 0;
             height: 100%;
             background: linear-gradient(90deg, #16a34a, #84cc16);
+            z-index: 2;
         }
 
         .debug-panel {
@@ -679,6 +730,28 @@ function init() {
             return 0
         }
 
+        function getProgressContext(row) {
+            const watched = Number(row.progress) || 0
+            const total = typeof row.totalEpisodes === "number" && row.totalEpisodes > 0 ? row.totalEpisodes : null
+            const latestRaw = typeof row.latestEpisode === "number" && row.latestEpisode >= 0 ? row.latestEpisode : null
+            const latest = latestRaw === null ? total : (total === null ? latestRaw : Math.min(latestRaw, total))
+
+            const denominator = total || (latest && latest > 0 ? latest : Math.max(watched, 1))
+            const watchedClamped = Math.min(Math.max(0, watched), denominator)
+            const releasedClamped = latest === null ? watchedClamped : Math.min(Math.max(0, latest), denominator)
+
+            const watchedPercent = Math.max(0, Math.min(100, Math.round((watchedClamped / denominator) * 100)))
+            const releasedPercent = Math.max(0, Math.min(100, Math.round((releasedClamped / denominator) * 100)))
+            const summary = "Watched " + watched + (latest !== null ? " • Latest " + latest : "") + (total !== null ? " • Total " + total : "")
+
+            return {
+                totalIsNull: total === null,
+                watchedPercent: watchedPercent,
+                releasedPercent: releasedPercent,
+                summary: summary
+            }
+        }
+
         function App() {
             const [loading, setLoading] = useState(true)
             const [error, setError] = useState("")
@@ -787,9 +860,8 @@ function init() {
             if (columnVisibility.status) headerCells.push(h("th", { key: "h-status" }, "Status"))
             if (columnVisibility.progress) headerCells.push(h("th", { key: "h-progress" }, "Progress"))
             if (columnVisibility.format) headerCells.push(h("th", { key: "h-format" }, "Type / Format"))
-
-            const tableBodyRows = visibleRows.map((row) => {
-                const percent = progressPercent(row)
+                const tableBodyRows = visibleRows.map((row) => {
+                const progressContext = getProgressContext(row)
                 const totalText = typeof row.totalEpisodes === "number" ? String(row.totalEpisodes) : "-"
                 const coverHeight = Math.round(coverSize * 1.38)
                 const cells = []
@@ -827,8 +899,14 @@ function init() {
                     cells.push(
                         h("td", { key: "progress" },
                             h("div", { class: "progress" }, [
-                                h("div", { class: "progress-track" }, h("div", { class: "progress-fill", style: { width: percent + "%" } })),
-                                h("span", { class: "muted" }, percent + "%")
+                                h("div", { class: "progress-top" }, [
+                                    h("div", { class: "progress-track" }, [
+                                        h("div", { class: "progress-released", style: { width: progressContext.releasedPercent + "%" } }),
+                                        h("div", { class: "progress-fill", style: { width: progressContext.watchedPercent + "%" } })
+                                    ]),
+                                    h("span", { class: "muted" },   progressContext.totalIsNull ? "-" : progressContext.watchedPercent + "%")
+                                ]),
+                                h("span", { class: "progress-meta" }, progressContext.summary)
                             ])
                         )
                     )
