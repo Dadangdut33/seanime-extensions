@@ -251,17 +251,6 @@ function init() {
 
           try {
             const entry = await ctx.anime.getAnimeEntry(row.mediaId);
-            const downloadedUnwatchedRaw = entry.libraryData?.unwatchedCount;
-            const downloadedUnwatched = Math.max(
-              0,
-              typeof downloadedUnwatchedRaw === 'number'
-                ? downloadedUnwatchedRaw
-                : 0,
-            );
-            const neededToDownload = Math.max(
-              0,
-              parseInt(String(row.releasedUnwatched)) - downloadedUnwatched,
-            );
 
             const downloadedEpisodeNumbers = new Set<number>();
             for (const episode of entry.episodes || []) {
@@ -284,6 +273,18 @@ function init() {
               watchedUntil,
               latestKnown || 0,
               highestDownloaded,
+            );
+            // count it ourselves because the result might be unreliable
+            // in edge cases where the user uses symlink and the will be dupe
+            const downloadedUnwatched =
+              latestKnown !== null
+                ? Array.from(downloadedEpisodeNumbers).filter(
+                    (ep) => ep > watchedUntil && ep <= latestKnown,
+                  ).length
+                : 0;
+            const neededToDownload = Math.max(
+              0,
+              parseInt(String(row.releasedUnwatched)) - downloadedUnwatched,
             );
             const MAX_RENDERED_PILLS = 80;
             const startEpisode =
