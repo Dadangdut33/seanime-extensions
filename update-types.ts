@@ -1,9 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Types: https://github.com/5rahim/seanime/tree/main/internal/extension_repo/goja_plugin_types
 const BASE_URL =
   'https://raw.githubusercontent.com/5rahim/seanime/refs/heads/main/internal/extension_repo/goja_plugin_types/';
-const FILES = ['app.d.ts', 'core.d.ts', 'plugin.d.ts', 'system.d.ts'];
+const FILES = [
+  'app.d.ts',
+  'core.d.ts',
+  'plugin.d.ts',
+  'system.d.ts',
+  // 'tsconfig.json',
+];
 const PLUGINS_DIR = path.join(process.cwd(), 'plugins');
 
 async function updateTypes() {
@@ -36,7 +43,7 @@ async function updateTypes() {
           const response = await fetch(url);
           if (!response.ok) {
             throw new Error(
-              `Failed to fetch ${filename}: ${response.statusText}`
+              `Failed to fetch ${filename}: ${response.statusText}`,
             );
           }
 
@@ -45,7 +52,7 @@ async function updateTypes() {
           console.log(`  [OK] ${filename}`);
         } catch (error: any) {
           console.error(
-            `  [ERROR] Failed to update ${filename}: ${error.message}`
+            `  [ERROR] Failed to update ${filename}: ${error.message}`,
           );
         }
       }

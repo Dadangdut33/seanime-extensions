@@ -1,11 +1,11 @@
 {
   "name": "seanime-extensions",
   "version": "1.0.0",
-  "description": "",
+  "description": "Extensions for Seanime",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev": "node dev.ts",
+    "dev": "nodemon dev.ts",
     "update-types": "node update-types.ts"
   },
   "keywords": [],
@@ -13,6 +13,8 @@
   "license": "MIT",
   "packageManager": "pnpm@10.26.2",
   "devDependencies": {
-    "@types/node": "^25.0.8"
+    "@types/node": "^25.0.8",
+    "nodemon": "^3.1.11",
+    "ts-node": "^10.9.2"
   }
 }

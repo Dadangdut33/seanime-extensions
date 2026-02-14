@@ -17,6 +17,7 @@ interface FileToDelete {
   size: number;
 }
 
+// @ts-ignore
 function init() {
   console.log('[Delete Watched Episodes] Plugin loaded');
 }
