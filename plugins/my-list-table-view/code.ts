@@ -678,8 +678,9 @@ function init() {
 
         table {
             width: 100%;
-            min-width: 920px;
+            min-width: 1180px;
             border-collapse: collapse;
+            table-layout: fixed;
         }
 
         thead {
@@ -733,13 +734,18 @@ function init() {
             white-space: normal;
             overflow-wrap: anywhere;
             word-break: break-word;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
 
         .title-btn:hover { text-decoration: underline; }
 
         .title-cell {
-            min-width: 200px;
-            max-width: 3500px;
+            width: 320px;
+            min-width: 320px;
+            max-width: 320px;
         }
 
         .muted { color: var(--muted); }
@@ -849,12 +855,23 @@ function init() {
             display: flex;
             flex-wrap: wrap;
             gap: 4px;
+            max-height: 54px;
+            overflow-y: auto;
         }
 
         .episode-status-cell {
             width: 320px;
+            min-width: 320px;
             max-width: 320px;
         }
+
+        .col-cover { width: 84px; }
+        .col-watched { width: 86px; white-space: nowrap; }
+        .col-total { width: 86px; white-space: nowrap; }
+        .col-score { width: 86px; white-space: nowrap; }
+        .col-status { width: 128px; white-space: nowrap; }
+        .col-progress { width: 220px; }
+        .col-format { width: 110px; white-space: nowrap; }
 
         .episode-pill {
             display: inline-flex;
@@ -892,17 +909,20 @@ function init() {
         }
 
         .table-wrap::-webkit-scrollbar,
+        .episode-pill-list::-webkit-scrollbar,
         .debug-logs::-webkit-scrollbar {
             width: 10px;
             height: 10px;
         }
 
         .table-wrap::-webkit-scrollbar-track,
+        .episode-pill-list::-webkit-scrollbar-track,
         .debug-logs::-webkit-scrollbar-track {
             background: rgba(255, 255, 255, 0.08);
         }
 
         .table-wrap::-webkit-scrollbar-thumb,
+        .episode-pill-list::-webkit-scrollbar-thumb,
         .debug-logs::-webkit-scrollbar-thumb {
             background: rgba(148, 163, 184, 0.6);
             border-radius: 999px;
@@ -911,9 +931,22 @@ function init() {
         }
 
         .table-wrap::-webkit-scrollbar-thumb:hover,
+        .episode-pill-list::-webkit-scrollbar-thumb:hover,
         .debug-logs::-webkit-scrollbar-thumb:hover {
             background: rgba(203, 213, 225, 0.9);
             background-clip: content-box;
+        }
+
+        .virtual-row td {
+            height: 84px;
+            max-height: 84px;
+            overflow: hidden;
+        }
+
+        .spacer-row td {
+            border-bottom: none;
+            padding: 0;
+            height: 0;
         }
 
         @media (max-width: 900px) {
@@ -927,9 +960,9 @@ function init() {
 
     <script type="module">
         import { h, render } from "https://esm.sh/preact@10.19.3"
-        import { useEffect, useMemo, useState } from "https://esm.sh/preact@10.19.3/hooks"
+        import { useEffect, useMemo, useRef, useState } from "https://esm.sh/preact@10.19.3/hooks"
 
-        const ENABLE_DEBUG_LOGS = true
+        const ENABLE_DEBUG_LOGS_CLIENT = false
         const STATUS_LABELS = {
             CURRENT: "Currently Watching",
             COMPLETED: "Completed",
@@ -963,6 +996,8 @@ function init() {
         const COVER_SIZE_MIN = 28
         const COVER_SIZE_MAX = 92
         const DEFAULT_COVER_SIZE = 42
+        const VIRTUALIZE_AFTER_ROWS = 120
+        const OVERSCAN_ROWS = 10
 
         function clamp(value, min, max) {
             return Math.max(min, Math.min(max, value))
@@ -1011,9 +1046,13 @@ function init() {
             const [columnVisibility, setColumnVisibility] = useState(DEFAULT_COLUMN_VISIBILITY)
             const [coverSize, setCoverSize] = useState(DEFAULT_COVER_SIZE)
             const [debugLogs, setDebugLogs] = useState([])
+            const [scrollTop, setScrollTop] = useState(0)
+            const [viewportHeight, setViewportHeight] = useState(700)
+            const tableWrapRef = useRef(null)
+            const coverSizeDebounceRef = useRef(null)
 
             const logClient = (message) => {
-                if (!ENABLE_DEBUG_LOGS) return
+                if (!ENABLE_DEBUG_LOGS_CLIENT) return
                 const now = new Date()
                 let ms = String(now.getMilliseconds())
                 if (ms.length < 3) ms = ("00" + ms).slice(-3)
@@ -1069,6 +1108,40 @@ function init() {
                 }
             }, [])
 
+            useEffect(() => {
+                const el = tableWrapRef.current
+                if (!el) return
+                const updateViewport = () => {
+                    setViewportHeight(el.clientHeight || 700)
+                }
+                const onScroll = () => {
+                    setScrollTop(el.scrollTop || 0)
+                }
+                updateViewport()
+                onScroll()
+                el.addEventListener("scroll", onScroll, { passive: true })
+                window.addEventListener("resize", updateViewport)
+                return () => {
+                    el.removeEventListener("scroll", onScroll)
+                    window.removeEventListener("resize", updateViewport)
+                }
+            }, [activeTab, rows.length])
+
+            useEffect(() => {
+                const el = tableWrapRef.current
+                if (!el) return
+                el.scrollTop = 0
+                setScrollTop(0)
+            }, [activeTab])
+
+            useEffect(() => {
+                return () => {
+                    if (coverSizeDebounceRef.current) {
+                        clearTimeout(coverSizeDebounceRef.current)
+                    }
+                }
+            }, [])
+
             const statusCounts = useMemo(() => {
                 const counts = { CURRENT: 0, COMPLETED: 0, PAUSED: 0, DROPPED: 0, PLANNING: 0 }
                 rows.forEach((row) => {
@@ -1107,21 +1180,42 @@ function init() {
             const onCoverSizeInput = (event) => {
                 const nextSize = clamp(Math.round(Number(event.currentTarget.value || DEFAULT_COVER_SIZE)), COVER_SIZE_MIN, COVER_SIZE_MAX)
                 setCoverSize(nextSize)
-                send("set-cover-size", { size: nextSize })
+                if (coverSizeDebounceRef.current) clearTimeout(coverSizeDebounceRef.current)
+                coverSizeDebounceRef.current = setTimeout(() => {
+                    send("set-cover-size", { size: nextSize })
+                }, 180)
             }
 
             const headerCells = []
             const showUnwatchedColumn = columnVisibility.unwatched && activeTab === "CURRENT"
-            if (columnVisibility.cover) headerCells.push(h("th", { key: "h-cover" }, "Cover"))
-            if (columnVisibility.title) headerCells.push(h("th", { key: "h-title" }, "Title"))
-            if (columnVisibility.watched) headerCells.push(h("th", { key: "h-watched" }, "Watched"))
-            if (columnVisibility.total) headerCells.push(h("th", { key: "h-total" }, "Total"))
-            if (columnVisibility.score) headerCells.push(h("th", { key: "h-score" }, "Score"))
-            if (columnVisibility.status) headerCells.push(h("th", { key: "h-status" }, "Status"))
-            if (columnVisibility.progress) headerCells.push(h("th", { key: "h-progress" }, "Progress"))
-            if (showUnwatchedColumn) headerCells.push(h("th", { key: "h-unwatched" }, "Episode Status"))
-            if (columnVisibility.format) headerCells.push(h("th", { key: "h-format" }, "Type / Format"))
-                const tableBodyRows = visibleRows.map((row) => {
+            if (columnVisibility.cover) headerCells.push(h("th", { key: "h-cover", class: "col-cover" }, "Cover"))
+            if (columnVisibility.title) headerCells.push(h("th", { key: "h-title", class: "title-cell" }, "Title"))
+            if (columnVisibility.watched) headerCells.push(h("th", { key: "h-watched", class: "col-watched" }, "Watched"))
+            if (columnVisibility.total) headerCells.push(h("th", { key: "h-total", class: "col-total" }, "Total"))
+            if (columnVisibility.score) headerCells.push(h("th", { key: "h-score", class: "col-score" }, "Score"))
+            if (columnVisibility.status) headerCells.push(h("th", { key: "h-status", class: "col-status" }, "Status"))
+            if (columnVisibility.progress) headerCells.push(h("th", { key: "h-progress", class: "col-progress" }, "Progress"))
+            if (showUnwatchedColumn) headerCells.push(h("th", { key: "h-unwatched", class: "episode-status-cell" }, "Episode Status"))
+            if (columnVisibility.format) headerCells.push(h("th", { key: "h-format", class: "col-format" }, "Type / Format"))
+            const columnCount = Math.max(1, headerCells.length)
+            const virtualRowHeight = showUnwatchedColumn ? 84 : 62
+            const shouldVirtualize = visibleRows.length > VIRTUALIZE_AFTER_ROWS
+            const virtualStart = shouldVirtualize
+                ? Math.max(0, Math.floor(scrollTop / virtualRowHeight) - OVERSCAN_ROWS)
+                : 0
+            const visibleCount = shouldVirtualize
+                ? Math.max(1, Math.ceil(viewportHeight / virtualRowHeight) + OVERSCAN_ROWS * 2)
+                : visibleRows.length
+            const virtualEnd = shouldVirtualize
+                ? Math.min(visibleRows.length, virtualStart + visibleCount)
+                : visibleRows.length
+            const rowsForRender = shouldVirtualize
+                ? visibleRows.slice(virtualStart, virtualEnd)
+                : visibleRows
+            const topSpacerHeight = shouldVirtualize ? virtualStart * virtualRowHeight : 0
+            const bottomSpacerHeight = shouldVirtualize ? Math.max(0, (visibleRows.length - virtualEnd) * virtualRowHeight) : 0
+
+            const tableBodyRows = rowsForRender.map((row) => {
                 const progressContext = getProgressContext(row)
                 const totalText = typeof row.totalEpisodes === "number" ? String(row.totalEpisodes) : "-"
                 const hasDownloadContext =
@@ -1134,7 +1228,7 @@ function init() {
 
                 if (columnVisibility.cover) {
                     cells.push(
-                        h("td", { key: "cover" },
+                        h("td", { key: "cover", class: "col-cover" },
                             h("img", {
                                 class: "cover",
                                 src: row.coverImage || "",
@@ -1155,15 +1249,15 @@ function init() {
                         )
                     )
                 }
-                if (columnVisibility.watched) cells.push(h("td", { key: "watched" }, String(row.progress)))
-                if (columnVisibility.total) cells.push(h("td", { key: "total" }, totalText))
-                if (columnVisibility.score) cells.push(h("td", { key: "score" }, formatScore(row.score)))
+                if (columnVisibility.watched) cells.push(h("td", { key: "watched", class: "col-watched" }, String(row.progress)))
+                if (columnVisibility.total) cells.push(h("td", { key: "total", class: "col-total" }, totalText))
+                if (columnVisibility.score) cells.push(h("td", { key: "score", class: "col-score" }, formatScore(row.score)))
                 if (columnVisibility.status) {
-                    cells.push(h("td", { key: "status" }, h("span", { class: "badge" }, STATUS_LABELS[row.status] || row.status)))
+                    cells.push(h("td", { key: "status", class: "col-status" }, h("span", { class: "badge" }, STATUS_LABELS[row.status] || row.status)))
                 }
                 if (columnVisibility.progress) {
                     cells.push(
-                        h("td", { key: "progress" },
+                        h("td", { key: "progress", class: "col-progress" },
                             h("div", { class: "progress" }, [
                                 h("div", { class: "progress-top" }, [
                                     h("div", { class: "progress-track" }, [
@@ -1238,9 +1332,9 @@ function init() {
                         )
                     }
                 }
-                if (columnVisibility.format) cells.push(h("td", { key: "format" }, row.format || "-"))
+                if (columnVisibility.format) cells.push(h("td", { key: "format", class: "col-format" }, row.format || "-"))
 
-                return h("tr", { key: row.entryId }, cells)
+                return h("tr", { key: row.entryId, class: shouldVirtualize ? "virtual-row" : "" }, cells)
             })
 
             const tabs = STATUS_ORDER.map((status) =>
@@ -1274,11 +1368,34 @@ function init() {
                     "."
                 ])
             } else {
+                const tbodyItems = []
+                if (topSpacerHeight > 0) {
+                    tbodyItems.push(
+                        h("tr", { key: "top-spacer", class: "spacer-row", "aria-hidden": "true" }, [
+                            h("td", {
+                                colSpan: columnCount,
+                                style: { height: topSpacerHeight + "px" }
+                            })
+                        ])
+                    )
+                }
+                Array.prototype.push.apply(tbodyItems, tableBodyRows)
+                if (bottomSpacerHeight > 0) {
+                    tbodyItems.push(
+                        h("tr", { key: "bottom-spacer", class: "spacer-row", "aria-hidden": "true" }, [
+                            h("td", {
+                                colSpan: columnCount,
+                                style: { height: bottomSpacerHeight + "px" }
+                            })
+                        ])
+                    )
+                }
+
                 content = h("div", { class: "table-shell" },
-                    h("div", { class: "table-wrap" },
+                    h("div", { class: "table-wrap", ref: tableWrapRef },
                         h("table", null, [
                             h("thead", null, h("tr", null, headerCells)),
-                            h("tbody", null, tableBodyRows)
+                            h("tbody", null, tbodyItems)
                         ])
                     )
                 )
