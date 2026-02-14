@@ -16,8 +16,7 @@
     "permissions": {
       "scopes": ["anilist", "system", "storage"],
       "allow": {
-        "readPaths": ["$DOWNLOAD/**/*", "$SEANIME_ANIME_LIBRARY/**/*"],
-        "writePaths": ["$DOWNLOAD/**/*", "$SEANIME_ANIME_LIBRARY/**/*"]
+        "readPaths": ["$DOWNLOAD/**/*", "$SEANIME_ANIME_LIBRARY/**/*"]
       }
     }
   }
