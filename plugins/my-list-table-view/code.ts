@@ -939,8 +939,8 @@ function init() {
         }
 
         .virtual-row td {
-            height: 84px;
-            max-height: 84px;
+            height: var(--virtual-row-height, 84px);
+            max-height: var(--virtual-row-height, 84px);
             overflow: hidden;
         }
 
@@ -1122,9 +1122,15 @@ function init() {
                 onScroll()
                 el.addEventListener("scroll", onScroll, { passive: true })
                 window.addEventListener("resize", updateViewport)
+                let ro = null
+                if (typeof ResizeObserver !== "undefined") {
+                    ro = new ResizeObserver(() => updateViewport())
+                    ro.observe(el)
+                }
                 return () => {
                     el.removeEventListener("scroll", onScroll)
                     window.removeEventListener("resize", updateViewport)
+                    if (ro) ro.disconnect()
                 }
             }, [activeTab, rows.length])
 
@@ -1201,8 +1207,12 @@ function init() {
             const columnCount = Math.max(1, headerCells.length)
             const virtualRowHeight = showUnwatchedColumn ? 84 : 62
             const shouldVirtualize = visibleRows.length > VIRTUALIZE_AFTER_ROWS
-            const virtualStart = shouldVirtualize
+            const virtualStartRaw = shouldVirtualize
                 ? Math.max(0, Math.floor(scrollTop / virtualRowHeight) - OVERSCAN_ROWS)
+                : 0
+            const maxStartIndex = Math.max(0, visibleRows.length - 1)
+            const virtualStart = shouldVirtualize
+                ? Math.min(maxStartIndex, virtualStartRaw)
                 : 0
             const visibleCount = shouldVirtualize
                 ? Math.max(1, Math.ceil(viewportHeight / virtualRowHeight) + OVERSCAN_ROWS * 2)
@@ -1335,7 +1345,17 @@ function init() {
                 }
                 if (columnVisibility.format) cells.push(h("td", { key: "format", class: "col-format" }, row.format || "-"))
 
-                return h("tr", { key: row.entryId, class: shouldVirtualize ? "virtual-row" : "" }, cells)
+                return h(
+                    "tr",
+                    {
+                        key: row.entryId,
+                        class: shouldVirtualize ? "virtual-row" : "",
+                        style: shouldVirtualize
+                            ? { "--virtual-row-height": virtualRowHeight + "px" }
+                            : undefined
+                    },
+                    cells
+                )
             })
 
             const tabs = STATUS_ORDER.map((status) =>
@@ -1356,6 +1376,23 @@ function init() {
                     h("span", null, item.label)
                 ])
             )
+
+            useEffect(() => {
+                const el = tableWrapRef.current
+                if (!el) return
+                const virtualRowHeight = showUnwatchedColumn ? 84 : 62
+                const shouldVirtualize = visibleRows.length > VIRTUALIZE_AFTER_ROWS
+                if (!shouldVirtualize) return
+                const totalVirtualHeight = visibleRows.length * virtualRowHeight
+                const maxScrollTop = Math.max(
+                    0,
+                    totalVirtualHeight - (el.clientHeight || viewportHeight || 0)
+                )
+                if (el.scrollTop > maxScrollTop) {
+                    el.scrollTop = maxScrollTop
+                    setScrollTop(maxScrollTop)
+                }
+            }, [visibleRows.length, showUnwatchedColumn, viewportHeight])
 
             let content = null
             if (loading) {
