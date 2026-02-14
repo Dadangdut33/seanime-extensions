@@ -735,6 +735,30 @@ function init() {
             border-bottom: 1px solid var(--line);
         }
 
+        .th-sort-btn {
+            border: 0;
+            background: transparent;
+            color: inherit;
+            text-transform: inherit;
+            letter-spacing: inherit;
+            font-size: inherit;
+            font-weight: 600;
+            padding: 0;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .th-sort-btn:hover {
+            color: var(--text);
+        }
+
+        .th-sort-indicator {
+            font-size: 11px;
+            color: var(--text);
+        }
+
         tbody td {
             padding: 10px 12px;
             border-bottom: 1px solid var(--line-soft);
@@ -1049,6 +1073,27 @@ function init() {
             return 0
         }
 
+        function compareNullableNumber(a, b) {
+            const aNum = typeof a === "number" && Number.isFinite(a) ? a : null
+            const bNum = typeof b === "number" && Number.isFinite(b) ? b : null
+            if (aNum === null && bNum === null) return 0
+            if (aNum === null) return 1
+            if (bNum === null) return -1
+            if (aNum === bNum) return 0
+            return aNum > bNum ? 1 : -1
+        }
+
+        function compareText(a, b) {
+            return String(a || "").localeCompare(String(b || ""), undefined, { sensitivity: "base" })
+        }
+
+        function progressSortValue(row) {
+            if (typeof row.totalEpisodes === "number" && row.totalEpisodes > 0) {
+                return row.progress / row.totalEpisodes
+            }
+            return null
+        }
+
         function getProgressContext(row) {
             const watched = Number(row.progress) || 0
             const total = typeof row.totalEpisodes === "number" && row.totalEpisodes > 0 ? row.totalEpisodes : null
@@ -1086,6 +1131,8 @@ function init() {
             const [scoreMaxFilter, setScoreMaxFilter] = useState("")
             const [episodesMinFilter, setEpisodesMinFilter] = useState("")
             const [episodesMaxFilter, setEpisodesMaxFilter] = useState("")
+            const [sortKey, setSortKey] = useState("title")
+            const [sortDir, setSortDir] = useState("asc")
             const [scrollTop, setScrollTop] = useState(0)
             const [viewportHeight, setViewportHeight] = useState(700)
             const tableWrapRef = useRef(null)
@@ -1281,38 +1328,94 @@ function init() {
                 setEpisodesMaxFilter("")
             }
 
+            const onSortColumn = (key) => {
+                if (sortKey === key) {
+                    setSortDir((prev) => (prev === "asc" ? "desc" : "asc"))
+                    return
+                }
+                setSortKey(key)
+                setSortDir("asc")
+            }
+
+            const renderSortableHeader = (key, className, label) => {
+                const active = sortKey === key
+                const indicator = active ? (sortDir === "asc" ? "▲" : "▼") : ""
+                return h(
+                    "th",
+                    { key: "h-" + key, class: className },
+                    h(
+                        "button",
+                        {
+                            class: "th-sort-btn",
+                            type: "button",
+                            onClick: () => onSortColumn(key),
+                            title: "Sort by " + label
+                        },
+                        [
+                            h("span", null, label),
+                            indicator ? h("span", { class: "th-sort-indicator" }, indicator) : null
+                        ]
+                    )
+                )
+            }
+
+            const sortedRows = useMemo(() => {
+                const next = visibleRows.slice()
+                const direction = sortDir === "asc" ? 1 : -1
+                next.sort((a, b) => {
+                    let result = 0
+                    if (sortKey === "title") result = compareText(a.title, b.title)
+                    else if (sortKey === "watched") result = compareNullableNumber(a.progress, b.progress)
+                    else if (sortKey === "total") result = compareNullableNumber(a.totalEpisodes, b.totalEpisodes)
+                    else if (sortKey === "score") result = compareNullableNumber(a.score, b.score)
+                    else if (sortKey === "progress") {
+                        result = compareNullableNumber(progressSortValue(a), progressSortValue(b))
+                        if (result === 0) result = compareNullableNumber(a.progress, b.progress)
+                    } else if (sortKey === "unwatched") {
+                        result = compareNullableNumber(a.downloadedUnwatched, b.downloadedUnwatched)
+                    } else if (sortKey === "format") {
+                        result = compareText(a.format, b.format)
+                    }
+                    if (result === 0) {
+                        result = compareText(a.title, b.title)
+                    }
+                    return result * direction
+                })
+                return next
+            }, [visibleRows, sortKey, sortDir])
+
             const headerCells = []
             const showUnwatchedColumn = columnVisibility.unwatched && activeTab === "CURRENT"
             if (columnVisibility.cover) headerCells.push(h("th", { key: "h-cover", class: "col-cover" }, "Cover"))
-            if (columnVisibility.title) headerCells.push(h("th", { key: "h-title", class: "title-cell" }, "Title"))
-            if (columnVisibility.watched) headerCells.push(h("th", { key: "h-watched", class: "col-watched" }, "Watched"))
-            if (columnVisibility.total) headerCells.push(h("th", { key: "h-total", class: "col-total" }, "Total"))
-            if (columnVisibility.score) headerCells.push(h("th", { key: "h-score", class: "col-score" }, "Score"))
+            if (columnVisibility.title) headerCells.push(renderSortableHeader("title", "title-cell", "Title"))
+            if (columnVisibility.watched) headerCells.push(renderSortableHeader("watched", "col-watched", "Watched"))
+            if (columnVisibility.total) headerCells.push(renderSortableHeader("total", "col-total", "Total"))
+            if (columnVisibility.score) headerCells.push(renderSortableHeader("score", "col-score", "Score"))
             if (columnVisibility.status) headerCells.push(h("th", { key: "h-status", class: "col-status" }, "Status"))
-            if (columnVisibility.progress) headerCells.push(h("th", { key: "h-progress", class: "col-progress" }, "Progress"))
-            if (showUnwatchedColumn) headerCells.push(h("th", { key: "h-unwatched", class: "episode-status-cell" }, "Episode Status"))
-            if (columnVisibility.format) headerCells.push(h("th", { key: "h-format", class: "col-format" }, "Type / Format"))
+            if (columnVisibility.progress) headerCells.push(renderSortableHeader("progress", "col-progress", "Progress"))
+            if (showUnwatchedColumn) headerCells.push(renderSortableHeader("unwatched", "episode-status-cell", "Episode Status"))
+            if (columnVisibility.format) headerCells.push(renderSortableHeader("format", "col-format", "Type / Format"))
             const columnCount = Math.max(1, headerCells.length)
             const virtualRowHeight = showUnwatchedColumn ? 84 : 62
-            const shouldVirtualize = visibleRows.length > VIRTUALIZE_AFTER_ROWS
+            const shouldVirtualize = sortedRows.length > VIRTUALIZE_AFTER_ROWS
             const virtualStartRaw = shouldVirtualize
                 ? Math.max(0, Math.floor(scrollTop / virtualRowHeight) - OVERSCAN_ROWS)
                 : 0
-            const maxStartIndex = Math.max(0, visibleRows.length - 1)
+            const maxStartIndex = Math.max(0, sortedRows.length - 1)
             const virtualStart = shouldVirtualize
                 ? Math.min(maxStartIndex, virtualStartRaw)
                 : 0
             const visibleCount = shouldVirtualize
                 ? Math.max(1, Math.ceil(viewportHeight / virtualRowHeight) + OVERSCAN_ROWS * 2)
-                : visibleRows.length
+                : sortedRows.length
             const virtualEnd = shouldVirtualize
-                ? Math.min(visibleRows.length, virtualStart + visibleCount)
-                : visibleRows.length
+                ? Math.min(sortedRows.length, virtualStart + visibleCount)
+                : sortedRows.length
             const rowsForRender = shouldVirtualize
-                ? visibleRows.slice(virtualStart, virtualEnd)
-                : visibleRows
+                ? sortedRows.slice(virtualStart, virtualEnd)
+                : sortedRows
             const topSpacerHeight = shouldVirtualize ? virtualStart * virtualRowHeight : 0
-            const bottomSpacerHeight = shouldVirtualize ? Math.max(0, (visibleRows.length - virtualEnd) * virtualRowHeight) : 0
+            const bottomSpacerHeight = shouldVirtualize ? Math.max(0, (sortedRows.length - virtualEnd) * virtualRowHeight) : 0
 
             const tableBodyRows = rowsForRender.map((row) => {
                 const progressContext = getProgressContext(row)
@@ -1469,9 +1572,9 @@ function init() {
                 const el = tableWrapRef.current
                 if (!el) return
                 const virtualRowHeight = showUnwatchedColumn ? 84 : 62
-                const shouldVirtualize = visibleRows.length > VIRTUALIZE_AFTER_ROWS
+                const shouldVirtualize = sortedRows.length > VIRTUALIZE_AFTER_ROWS
                 if (!shouldVirtualize) return
-                const totalVirtualHeight = visibleRows.length * virtualRowHeight
+                const totalVirtualHeight = sortedRows.length * virtualRowHeight
                 const maxScrollTop = Math.max(
                     0,
                     totalVirtualHeight - (el.clientHeight || viewportHeight || 0)
@@ -1480,14 +1583,21 @@ function init() {
                     el.scrollTop = maxScrollTop
                     setScrollTop(maxScrollTop)
                 }
-            }, [visibleRows.length, showUnwatchedColumn, viewportHeight])
+            }, [sortedRows.length, showUnwatchedColumn, viewportHeight])
+
+            useEffect(() => {
+                if (activeTab !== "CURRENT" && sortKey === "unwatched") {
+                    setSortKey("title")
+                    setSortDir("asc")
+                }
+            }, [activeTab, sortKey])
 
             let content = null
             if (loading) {
                 content = h("div", { class: "state" }, "Loading your anime list...")
             } else if (error) {
                 content = h("div", { class: "state error" }, error)
-            } else if (visibleRows.length === 0) {
+            } else if (sortedRows.length === 0) {
                 content = h("div", { class: "state" }, [
                     "No entries in ",
                     h("strong", null, STATUS_LABELS[activeTab] || activeTab),
